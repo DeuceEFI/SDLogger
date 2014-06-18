@@ -122,6 +122,18 @@
  
  This was taken from: http://arduino.cc/playground/Code/AvailableMemory
  
+
+ v3.11a Added 115200, 8 data bits, Odd parity, 1 stop bit setting for FreeEMS native logging.
+ This version additions by Andy Goss, agoss@coolefi.com 17 JUNE 2014
+ 
+ CONFIG.TXT settings for FreeEMS native logging:
+   11520O,26,3,0,1,1
+        ^ this is a capital letter O (oh)
+        
+ The log files are named LOG00000.bin or SEQLOG00.bin for use with FreeEMS log viewers.
+ 
+ 29340 bytes out of 32256.
+ 
  */
 
 #include <SdFat.h> //We do not use the built-in SD.h file because it calls Serial.print
@@ -182,6 +194,7 @@ char folderTree[FOLDER_TRACK_DEPTH][12];
 #define BAUD_9600	1
 #define BAUD_57600	2
 #define BAUD_115200	3
+#define BAUD_11520O	3
 #define BAUD_4800	4
 #define BAUD_19200	5
 #define BAUD_38400	6
@@ -290,6 +303,10 @@ void setup(void)
   if(setting_uart_speed == BAUD_38400) NewSerial.begin(38400);
   if(setting_uart_speed == BAUD_57600) NewSerial.begin(57600);
   if(setting_uart_speed == BAUD_115200) NewSerial.begin(115200);
+  if(setting_uart_speed == BAUD_11520O){ 
+                                          NewSerial.begin(115200);
+                                          UCSR0C = 0b00110110; // Async, Odd Parity, 1 Stop Bit, 8 Data Bits
+                                        }
   NewSerial.print("1");
 
   //Setup SD & FAT
@@ -369,7 +386,8 @@ void newlog(void)
   //If we made it this far, everything looks good - let's start testing to see if our file number is the next available
 
   //Search for next available log spot
-  char new_file_name[] = "LOG00000.TXT";
+  //char new_file_name[] = "LOG00000.TXT";
+  char new_file_name[] = "LOG00000.bin"; //FreeEMS Log File extension
   while(1)
   {
     new_file_number++;
@@ -379,7 +397,8 @@ void newlog(void)
       return; //Bail!
     }
 
-    sprintf(new_file_name, "LOG%05d.TXT", new_file_number); //Splice the new file number into this file name
+    //sprintf(new_file_name, "LOG%05d.TXT", new_file_number); //Splice the new file number into this file name
+    sprintf(new_file_name, "LOG%05d.bin", new_file_number); //Splice the new file number into this file name, FreeEMS Log File extension
 
     //Try to open file, if fail (file doesn't exist), then break
     if (file.open(&currentDirectory, new_file_name, O_CREAT | O_EXCL | O_WRITE)) break;
@@ -411,7 +430,8 @@ void newlog(void)
 //Return anything else on sucess
 void seqlog(void)
 {
-  char seq_file_name[13] = "SEQLOG00.TXT";
+  //char seq_file_name[13] = "SEQLOG00.TXT";
+  char seq_file_name[13] = "SEQLOG00.bin"; // FreeEMS Log File extension
 
   //Try to create sequential file
   if (!file.open(&currentDirectory, seq_file_name, O_CREAT | O_WRITE))
@@ -467,6 +487,7 @@ uint8_t append_file(char* file_name) {
   if(setting_uart_speed == BAUD_38400) maxLoops = 38400;
   if(setting_uart_speed == BAUD_57600) maxLoops = 57600;
   if(setting_uart_speed == BAUD_115200) maxLoops = 115200;
+  if(setting_uart_speed == BAUD_11520O) maxLoops = 115200;
   maxLoops /= 8; //Convert to bytes per second
   maxLoops /= LOCAL_BUFF_SIZE; //Convert to # of loops per second
 
@@ -793,6 +814,7 @@ void read_config_file(void)
       else if(strcmp(new_setting, "38400") == 0) new_system_baud = BAUD_38400;
       else if(strcmp(new_setting, "57600") == 0) new_system_baud = BAUD_57600;
       else if(strcmp(new_setting, "115200") == 0) new_system_baud = BAUD_115200;
+      else if(strcmp(new_setting, "11520O") == 0) new_system_baud = BAUD_11520O;
       else new_system_baud = BAUD_9600; //Default is 9600bps
     }
     else if(setting_number == 1) //Escape character
@@ -841,6 +863,7 @@ void read_config_file(void)
   if(new_system_baud == BAUD_38400) strcpy(temp_string, "38400");
   if(new_system_baud == BAUD_57600) strcpy(temp_string, "57600");
   if(new_system_baud == BAUD_115200) strcpy(temp_string, "115200");
+  if(new_system_baud == BAUD_11520O) strcpy(temp_string, "11520O"); // 115200 baud, Odd Parity, 1 Stop Bit, 8 Data Bits
 
   sprintf(temp, ",%d,%d,%d,%d,%d\0", new_system_escape, new_system_max_escape, new_system_mode, new_system_verbose, new_system_echo);
   strcat(temp_string, temp); //Add this string to the system string
@@ -866,6 +889,10 @@ void read_config_file(void)
     if(setting_uart_speed == BAUD_38400) NewSerial.begin(38400);
     if(setting_uart_speed == BAUD_57600) NewSerial.begin(57600);
     if(setting_uart_speed == BAUD_115200) NewSerial.begin(115200);
+    if(setting_uart_speed == BAUD_11520O) {
+                                            NewSerial.begin(115200);
+                                            UCSR0C = 0b00110110; // Async, Odd Parity, 1 Stop Bit, 8 Data Bits
+                                          }
 
     recordNewSettings = true;
   }
@@ -989,6 +1016,7 @@ void record_config_file(void)
   if(current_system_baud == BAUD_38400) strcpy(settings_string, "38400");
   if(current_system_baud == BAUD_57600) strcpy(settings_string, "57600");
   if(current_system_baud == BAUD_115200) strcpy(settings_string, "115200");
+  if(current_system_baud == BAUD_11520O) strcpy(settings_string, "11520O");
 
   //Convert system settings to visible ASCII characters
   sprintf(temp, ",%d,%d,%d,%d,%d\0", current_system_escape, current_system_max_escape, current_system_mode, current_system_verbose, current_system_echo);
@@ -1793,7 +1821,7 @@ uint8_t gotoDir(char *dir)
 
 void print_menu(void)
 {
-  NewSerial.println(F("OpenLog v3.11"));
+  NewSerial.println(F("OpenLog v3.11a"));
   NewSerial.println(F("Basic commands:"));
   NewSerial.println(F("new <file>\t\t: Creates <file>"));
   NewSerial.println(F("append <file>\t\t: Appends text to end of <file>.\r\n\t\t\t  The text is read from the UART in a stream and is not echoed. Finish by sending Ctrl+z (ASCII 26)"));
