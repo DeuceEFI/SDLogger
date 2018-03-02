@@ -127,8 +127,17 @@
  This version additions by Andy Goss, agoss@coolefi.com 17 JUNE 2014
  
  CONFIG.TXT settings for FreeEMS native logging:
-   11520O,26,3,0,1,1
-        ^ this is a capital letter O (oh)
+   115200,1,26,3,0,1,1
+        ^ ^  ^ ^ ^ ^ ^
+	| |  | | | | |
+        | |  | | | | \-echo 0=off 1=on
+        | |  | | | \---verbose 0=off 1=on
+        | |  | | \-----system mode 0=newLog 1=seqLog 3=command
+        | |  | \-------escape characters needed to enter command mode 
+        | |  \---------escape character ASCII(26) = CTRL+Z
+        | \------------parity 0=none 1=odd 2=even
+	\--------------baud
+	
         
  The log files are named LOG00000.bin or SEQLOG00.bin for use with FreeEMS log viewers.
  
@@ -178,26 +187,37 @@ void(* Reset_AVR) (void) = 0; //Dirty way of resetting the ATmega, but it works 
 char folderTree[FOLDER_TRACK_DEPTH][12];
 
 #define CFG_FILENAME "config.txt" //This is the name of the file that contains the unit settings
-#define CFG_LENGTH  20 //Length of text found in config file: "115200,103,14,0,1,1\0" = 115200 bps, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on. 
+#define CFG_LENGTH  24 //Length of text found in config file: "115200,0,103,14,0,1,1,0\0" = 115200 bps, NO parity, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on, EMStype off. 
 
 //Internal EEPROM locations for the user settings
 #define LOCATION_BAUD_SETTING		0x01
-#define LOCATION_SYSTEM_SETTING		0x02
-#define LOCATION_FILE_NUMBER_LSB	0x03
-#define LOCATION_FILE_NUMBER_MSB	0x04
-#define LOCATION_ESCAPE_CHAR		0x05
-#define LOCATION_MAX_ESCAPE_CHAR	0x06
-#define LOCATION_VERBOSE                0x07
-#define LOCATION_ECHO                   0x08
+#define LOCATION_PARITY			0x02
+#define LOCATION_SYSTEM_SETTING		0x03
+#define LOCATION_FILE_NUMBER_LSB	0x04
+#define LOCATION_FILE_NUMBER_MSB	0x05
+#define LOCATION_ESCAPE_CHAR		0x06
+#define LOCATION_MAX_ESCAPE_CHAR	0x07
+#define LOCATION_VERBOSE                0x08
+#define LOCATION_ECHO                   0x09
+//#define LOCATION_EMS                    0x0A
 
 #define BAUD_2400	0
 #define BAUD_9600	1
 #define BAUD_57600	2
 #define BAUD_115200	3
-#define BAUD_11520O	3
 #define BAUD_4800	4
 #define BAUD_19200	5
 #define BAUD_38400	6
+
+#define PARITY_NONE	0
+#define PARITY_ODD	1
+#define PARITY_EVEN	2
+
+//#define EMS_NONE	0
+//#define EMS_COOLEMS	1
+//#define EMS_COOLTCU	2
+//#define EMS_FREEEMS	3
+//#define EMS_MSTWO	4
 
 #define MODE_NEWLOG	0
 #define MODE_SEQLOG     1
@@ -237,11 +257,16 @@ SdFile currentDirectory;
 SdFile file;
 
 uint8_t setting_uart_speed; //This is the baud rate that the system runs at, default is 9600
+uint8_t setting_system_parity; //This is the parity setting, default is No parity
 uint8_t setting_system_mode; //This is the mode the system runs in, default is MODE_NEWLOG
 uint8_t setting_escape_character; //This is the ASCII character we look for to break logging, default is ctrl+z
 uint8_t setting_max_escape_character; //Number of escape chars before break logging, default is 3
 uint8_t setting_verbose; //This controls the whether we get extended or simple responses.
 uint8_t setting_echo; //This turns on/off echoing at the command prompt
+//uint8_t setting_ems; //This turns EMS datalog characters to send on/off, default is OFF
+
+//uint8_t freeems_decoder_request[8]={0xaa, 0x00, 0xee, 0x00, 0xdc, 0xee, 0x00, 0xcc};
+//uint8_t freeems_packet[2]={0xaa, 0xcc};
 
 //The number of command line arguments
 //Increase to support more arguments but be aware of the memory restrictions
@@ -303,10 +328,11 @@ void setup(void)
   if(setting_uart_speed == BAUD_38400) NewSerial.begin(38400);
   if(setting_uart_speed == BAUD_57600) NewSerial.begin(57600);
   if(setting_uart_speed == BAUD_115200) NewSerial.begin(115200);
-  if(setting_uart_speed == BAUD_11520O){ 
-                                          NewSerial.begin(115200);
-                                          UCSR0C = 0b00110110; // Async, Odd Parity, 1 Stop Bit, 8 Data Bits
-                                        }
+
+  if(setting_system_parity == PARITY_ODD) UCSR0C = 0b00110110; // Async, Odd Parity, 1 Stop Bit, 8 Data Bits
+  if(setting_system_parity == PARITY_EVEN) UCSR0C = 0b00100110; // Async, Even Parity, 1 Stop Bit, 8 Data Bits
+  if(setting_system_parity == PARITY_NONE) UCSR0C = 0b00000110; // Async, No Parity, 1 Stop Bit, 8 Data Bits
+
   NewSerial.print("1");
 
   //Setup SD & FAT
@@ -480,6 +506,7 @@ uint8_t append_file(char* file_name) {
   //Ugly calculation to figure out how many times to loop before we need to force a record (file.sync())
   uint32_t maxLoops;
   uint16_t timeSinceLastRecord = 0; //Sync the file every maxLoop # of bytes
+
   if(setting_uart_speed == BAUD_2400) maxLoops = 2400; //Set bits per second
   if(setting_uart_speed == BAUD_4800) maxLoops = 4800;
   if(setting_uart_speed == BAUD_9600) maxLoops = 9600;
@@ -487,7 +514,7 @@ uint8_t append_file(char* file_name) {
   if(setting_uart_speed == BAUD_38400) maxLoops = 38400;
   if(setting_uart_speed == BAUD_57600) maxLoops = 57600;
   if(setting_uart_speed == BAUD_115200) maxLoops = 115200;
-  if(setting_uart_speed == BAUD_11520O) maxLoops = 115200;
+
   maxLoops /= 8; //Convert to bytes per second
   maxLoops /= LOCAL_BUFF_SIZE; //Convert to # of loops per second
 
@@ -502,7 +529,18 @@ uint8_t append_file(char* file_name) {
 #endif
 
   //Start recording incoming characters
+
+  delay(1); //Burn 1ms waiting
+
+  if(setting_system_parity == PARITY_NONE) NewSerial.print("S");
+
+  delay(1); //Burn 1ms waiting
+
+//  if(setting_ems == EMS_COOLEMS) NewSerial.print("A"); //This sends the first character after the SDLogger is ready
+
   while(escape_chars_received < setting_max_escape_character) {
+
+//    if(setting_ems == EMS_COOLEMS) NewSerial.print("A");
 
     uint8_t n = NewSerial.read(localBuffer, sizeof(localBuffer)); //Read characters from global buffer into the local buffer
     if (n > 0) {
@@ -527,11 +565,14 @@ uint8_t append_file(char* file_name) {
 
       STAT1_PORT ^= (1<<STAT1); //Toggle the STAT1 LED each time we record the buffer
 
+      //if(setting_ems == EMS_COOLEMS) NewSerial.print("A");
+
       idleTime = 0; //We have characters so reset the idleTime
 
       if(timeSinceLastRecord++ > maxLoops) { //This will force a sync approximately every second
         timeSinceLastRecord = 0;
         file.sync(); //Sync the card
+        //if(setting_ems == EMS_COOLEMS) NewSerial.print("A"); //This never sent out an A
       }
 
     }
@@ -553,6 +594,8 @@ uint8_t append_file(char* file_name) {
     else {
       idleTime++;
       delay(1); //Burn 1ms waiting for new characters coming in
+      if(setting_system_parity == PARITY_NONE) NewSerial.print("A");
+//      if(setting_ems == EMS_COOLEMS) NewSerial.print("A"); //This just kept sending A's until the idle timer killed it
     }
 
   }
@@ -642,6 +685,9 @@ void set_default_settings(void)
   EEPROM.write(LOCATION_BAUD_SETTING, BAUD_9600);
 
   //Reset system to new log mode
+  EEPROM.write(LOCATION_PARITY, PARITY_NONE);
+
+  //Reset system to new log mode
   EEPROM.write(LOCATION_SYSTEM_SETTING, MODE_NEWLOG);
 
   //Reset escape character to ctrl+z
@@ -655,6 +701,9 @@ void set_default_settings(void)
 
   //Reset echo to on
   EEPROM.write(LOCATION_ECHO, ON);
+
+  //Reset ems to off
+//  EEPROM.write(LOCATION_EMS, EMS_NONE);
 
   //These settings are not recorded to the config file
   //We can't do it here because we are not sure the FAT system is init'd
@@ -671,6 +720,15 @@ void read_system_settings(void)
   {
     setting_uart_speed = BAUD_9600; //Reset UART to 9600 if there is no speed stored
     EEPROM.write(LOCATION_BAUD_SETTING, setting_uart_speed);
+  }
+
+  //Determine the system parity we should be using
+  //Default is No parity
+  setting_system_parity = EEPROM.read(LOCATION_PARITY);
+  if(setting_system_parity > 4) 
+  {
+    setting_system_parity = PARITY_NONE; //By default, unit will turn on and use no parity bit
+    EEPROM.write(LOCATION_PARITY, setting_system_parity);
   }
 
   //Determine the system mode we should be in
@@ -718,6 +776,15 @@ void read_system_settings(void)
     EEPROM.write(LOCATION_ECHO, setting_echo);
   }
 
+  //Read whether we should send EMS datalog request characters or not
+  //Default is OFF.
+//  setting_ems = EEPROM.read(LOCATION_EMS);
+//  if(setting_ems > 5) 
+//  {
+//    setting_ems = EMS_NONE; //Reset to EMS = none
+//    EEPROM.write(LOCATION_EMS, setting_ems);
+//  }
+
   //Set flags for extended mode options  
   if (setting_verbose == ON)
     feedback_mode |= EXTENDED_INFO;
@@ -757,10 +824,10 @@ void read_config_file(void)
   NewSerial.println(F("Found config file!"));
 #endif
 
-  //Read up to 20 characters from the file. There may be a better way of doing this...
+  //Read up to 21 characters from the file. There may be a better way of doing this...
   char c;
   int len;
-  uint8_t settings_string[CFG_LENGTH]; //"115200,103,14,0,1,1\0" = 115200 bps, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on.
+  uint8_t settings_string[CFG_LENGTH]; //"115200,0,103,14,0,1,1\0" = 115200 bps, 0=No parity/1=Odd parity/2=Even parity, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on.
   for(len = 0 ; len < CFG_LENGTH ; len++) {
     if( (c = file.read()) < 0) break; //We've reached the end of the file
     if(c == '\0') break; //Bail if we hit the end of this string
@@ -781,11 +848,13 @@ void read_config_file(void)
 
   //Default the system settings in case things go horribly wrong
   char new_system_baud = BAUD_9600;
+  char new_system_parity = PARITY_NONE;
   char new_system_mode = MODE_NEWLOG;
   char new_system_escape = 26;
   char new_system_max_escape = 3;
   char new_system_verbose = ON;
   char new_system_echo = ON;
+//  char new_system_ems = EMS_NONE;
 
   //Parse the settings out
   uint8_t i = 0, j = 0, setting_number = 0;
@@ -795,7 +864,7 @@ void read_config_file(void)
   for(i = 0 ; i < len; i++)
   {
     //Pick out one setting from the line of text
-    for(j = 0 ; settings_string[i] != ',' && i < len && j < 6 ; )
+    for(j = 0 ; settings_string[i] != ',' && i < len && j < 6 ; ) // was j < 6
     {
       new_setting[j] = settings_string[i];
       i++;
@@ -814,34 +883,49 @@ void read_config_file(void)
       else if(strcmp(new_setting, "38400") == 0) new_system_baud = BAUD_38400;
       else if(strcmp(new_setting, "57600") == 0) new_system_baud = BAUD_57600;
       else if(strcmp(new_setting, "115200") == 0) new_system_baud = BAUD_115200;
-      else if(strcmp(new_setting, "11520O") == 0) new_system_baud = BAUD_11520O;
       else new_system_baud = BAUD_9600; //Default is 9600bps
     }
-    else if(setting_number == 1) //Escape character
+    else if(setting_number == 1) //Parity
+    {
+      if(strcmp(new_setting, "0") == 0) new_system_parity = PARITY_NONE;
+      else if(strcmp(new_setting, "1") == 0) new_system_parity = PARITY_ODD;
+      else if(strcmp(new_setting, "2") == 0) new_system_parity = PARITY_EVEN;
+      else new_system_parity = PARITY_NONE;
+    }
+    else if(setting_number == 2) //Escape character
     {
       new_system_escape = new_setting_int;
       if(new_system_escape == 0 || new_system_escape > 127) new_system_escape = 26; //Default is ctrl+z
     }
-    else if(setting_number == 2) //Max amount escape character
+    else if(setting_number == 3) //Max amount escape character
     {
       new_system_max_escape = new_setting_int;
       if(new_system_max_escape == 0 || new_system_max_escape > 10) new_system_max_escape = 3; //Default is 3
     }
-    else if(setting_number == 3) //System mode
+    else if(setting_number == 4) //System mode
     {
       new_system_mode = new_setting_int;
       if(new_system_mode == 0 || new_system_mode > 5) new_system_mode = MODE_NEWLOG; //Default is NEWLOG
     }
-    else if(setting_number == 4) //Verbose setting
+    else if(setting_number == 5) //Verbose setting
     {
       new_system_verbose = new_setting_int;
       if(new_system_verbose != ON && new_system_verbose != OFF) new_system_verbose = ON; //Default is on
     }
-    else if(setting_number == 5) //Echo setting
+    else if(setting_number == 6) //Echo setting
     {
       new_system_echo = new_setting_int;
       if(new_system_echo != ON && new_system_echo != OFF) new_system_echo = ON; //Default is on
     }
+//    else if(setting_number == 7) //EMS Type setting
+//    {
+//      if(strcmp(new_setting, "0") == 0) new_system_ems = EMS_NONE;
+//      else if(strcmp(new_setting, "1") == 0) new_system_ems = EMS_COOLEMS;
+//      else if(strcmp(new_setting, "2") == 0) new_system_ems = EMS_COOLTCU;
+//      else if(strcmp(new_setting, "3") == 0) new_system_ems = EMS_FREEEMS;
+//      else if(strcmp(new_setting, "4") == 0) new_system_ems = EMS_MSTWO;
+//      else new_system_ems = EMS_NONE; //Default is 0=no EMS
+//    }
     else
       //We're done! Stop looking for settings
       break;
@@ -853,7 +937,7 @@ void read_config_file(void)
   //This will print the found settings. Use for debugging
   NewSerial.print(F("Settings determined to be: "));
 
-  char temp_string[CFG_LENGTH]; //"115200,103,14,0,1,1\0" = 115200 bps, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on.
+  char temp_string[CFG_LENGTH]; //"115200,0,103,14,0,1,1\0" = 115200 bps, 0=No parity/1=Odd parity/2=Even parity, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on.
   char temp[CFG_LENGTH];
 
   if(new_system_baud == BAUD_2400) strcpy(temp_string, "2400");
@@ -863,9 +947,8 @@ void read_config_file(void)
   if(new_system_baud == BAUD_38400) strcpy(temp_string, "38400");
   if(new_system_baud == BAUD_57600) strcpy(temp_string, "57600");
   if(new_system_baud == BAUD_115200) strcpy(temp_string, "115200");
-  if(new_system_baud == BAUD_11520O) strcpy(temp_string, "11520O"); // 115200 baud, Odd Parity, 1 Stop Bit, 8 Data Bits
 
-  sprintf(temp, ",%d,%d,%d,%d,%d\0", new_system_escape, new_system_max_escape, new_system_mode, new_system_verbose, new_system_echo);
+  sprintf(temp, ",%d,%d,%d,%d,%d,%d\0", new_system_parity, new_system_escape, new_system_max_escape, new_system_mode, new_system_verbose, new_system_echo);
   strcat(temp_string, temp); //Add this string to the system string
 
   NewSerial.println(temp_string);
@@ -889,10 +972,14 @@ void read_config_file(void)
     if(setting_uart_speed == BAUD_38400) NewSerial.begin(38400);
     if(setting_uart_speed == BAUD_57600) NewSerial.begin(57600);
     if(setting_uart_speed == BAUD_115200) NewSerial.begin(115200);
-    if(setting_uart_speed == BAUD_11520O) {
-                                            NewSerial.begin(115200);
-                                            UCSR0C = 0b00110110; // Async, Odd Parity, 1 Stop Bit, 8 Data Bits
-                                          }
+
+    recordNewSettings = true;
+  }
+
+  if(new_system_parity != setting_system_parity) {
+    //Goto new system mode
+    setting_system_parity = new_system_parity;
+    EEPROM.write(LOCATION_PARITY, setting_system_parity);
 
     recordNewSettings = true;
   }
@@ -936,6 +1023,14 @@ void read_config_file(void)
 
     recordNewSettings = true;
   }
+
+//  if(new_system_ems != setting_ems) {
+//    //Goto new ems setting
+//    setting_ems = new_system_ems;
+//    EEPROM.write(LOCATION_EMS, setting_ems);
+//
+//    recordNewSettings = true;
+//  }
 
   //We don't want to constantly record a new config file on each power on. Only record when there is a change.
   if(recordNewSettings == true)
@@ -997,16 +1092,18 @@ void record_config_file(void)
   }
   //Config was successfully created, now record current system settings to the config file
 
-  char settings_string[CFG_LENGTH]; //"115200,103,14,0,1,1\0" = 115200 bps, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on.
+  char settings_string[CFG_LENGTH]; //"115200,0,103,14,0,1,1\0" = 115200 bps, No parity, escape char of ASCII(103), 14 times, new log mode, verbose on, echo on.
   char temp[CFG_LENGTH]; //This contains bits of the overall config string.
 
   //Before we read the EEPROM values, they've already been tested and defaulted in the read_system_settings function
   char current_system_baud = EEPROM.read(LOCATION_BAUD_SETTING);
+  char current_system_parity = EEPROM.read(LOCATION_PARITY);
   char current_system_escape = EEPROM.read(LOCATION_ESCAPE_CHAR);
   char current_system_max_escape = EEPROM.read(LOCATION_MAX_ESCAPE_CHAR);
   char current_system_mode = EEPROM.read(LOCATION_SYSTEM_SETTING);
   char current_system_verbose = EEPROM.read(LOCATION_VERBOSE);
   char current_system_echo = EEPROM.read(LOCATION_ECHO);
+//  char current_system_ems = EEPROM.read(LOCATION_EMS);
 
   //Determine current baud and copy it to string
   if(current_system_baud == BAUD_2400) strcpy(settings_string, "2400");
@@ -1016,10 +1113,9 @@ void record_config_file(void)
   if(current_system_baud == BAUD_38400) strcpy(settings_string, "38400");
   if(current_system_baud == BAUD_57600) strcpy(settings_string, "57600");
   if(current_system_baud == BAUD_115200) strcpy(settings_string, "115200");
-  if(current_system_baud == BAUD_11520O) strcpy(settings_string, "11520O");
 
   //Convert system settings to visible ASCII characters
-  sprintf(temp, ",%d,%d,%d,%d,%d\0", current_system_escape, current_system_max_escape, current_system_mode, current_system_verbose, current_system_echo);
+  sprintf(temp, ",%d,%d,%d,%d,%d,%d\0", current_system_parity, current_system_escape, current_system_max_escape, current_system_mode, current_system_verbose, current_system_echo);
   strcat(settings_string, temp); //Add this string to the system string
 
 #if DEBUG
@@ -1032,7 +1128,7 @@ void record_config_file(void)
     NewSerial.println(F("error writing to file"));
 
   //Add a decoder line to the file
-  file.write("\n\rbaud,escape,esc#,mode,verb,echo\0"); //Add this string to the file
+  file.write("\n\rbaud,parity 0=none 1=odd 2=even,escape,esc#,mode 0=newlog 1=sequentiallog,verb,echo\0"); //Add this string to the file
 
     file.sync(); //Sync all newly written data to card
   file.close(); //Close this file

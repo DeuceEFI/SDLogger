@@ -1,2 +1,2 @@
-11520O,26,3,0,1,1
-baud,escape,esc#,mode,verb,echo
+115200,0,26,10,0,1,1
+baud,parity 0=none 1=odd 2=even,escape,esc#,mode 0=newlog 1=sequentiallog,verb,echo
